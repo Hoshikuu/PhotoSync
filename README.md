@@ -219,6 +219,35 @@ Debe responder `200` con `"status":"complete"`. Repetir la misma petición no cr
 
 Para desarrollar la aplicación Android, consulta [la guía de integración](./ANDROID_INTEGRATION.md).
 
+## 11. Activar la galería en el puerto 80
+
+La galería muestra los archivos del dispositivo correspondiente al token con el que entres. No necesita otro servidor Python: Nginx recibe las visitas en el puerto 80 y las pasa al servicio existente en el 8080. Las aplicaciones Android que usan el 8080 siguen funcionando.
+
+Si ya tenías una instalación anterior, copia al LXC la versión actual de `photosync/` (incluida la carpeta `static/`) y `deploy/photosync-nginx.conf`, como en el paso 4. Copia el código actualizado a `/opt/photosync` sin sustituir `/etc/photosync.env`, `/var/lib/photosync` ni los archivos del NAS. Después reinicia el backend:
+
+```sh
+systemctl restart photosync
+systemctl status photosync --no-pager
+```
+
+En el **LXC Debian**, instala Nginx y activa la configuración incluida:
+
+```sh
+apt update
+apt install -y nginx
+cp /opt/photosync/deploy/photosync-nginx.conf /etc/nginx/sites-available/photosync
+ln -s /etc/nginx/sites-available/photosync /etc/nginx/sites-enabled/photosync
+nginx -t
+systemctl enable --now nginx
+systemctl reload nginx
+```
+
+Si el enlace ya existe, no repitas `ln -s`. Si `nginx -t` o el inicio falla, comprueba `ss -ltnp | grep ':80'` y revisa la configuración existente antes de modificarla: otro servicio o sitio puede estar usando el puerto. La IP del `listen` de la configuración debe coincidir con la del LXC. Permite el puerto 80 desde la red local en el cortafuegos.
+
+En un navegador de la misma red, abre **http://192.168.1.202/** e introduce el token del móvil. El token se mantiene solo en la memoria de la pestaña y se borra al cerrar sesión o recargar. Cada dispositivo tiene su propio token y solo se muestran sus copias completadas. La galería carga páginas de 12 archivos y muestra vistas previas de JPEG, PNG, GIF, WebP y AVIF que no superen 20 MiB; los otros archivos aparecen sin vista previa. No genera miniaturas en el servidor.
+
+La conexión es HTTP y no cifra el token ni las fotos. Úsala en tu red de confianza; para cifrar el tráfico configura HTTPS en Nginx y un certificado que los clientes puedan verificar. No publiques el puerto en Internet. Como la galería descarga los originales para mostrarlos, comprueba el consumo de red y memoria del navegador con tu colección real.
+
 ## Problemas frecuentes
 
 - **El servicio no arranca:** ejecuta `systemctl status photosync --no-pager` y `journalctl -u photosync -n 100 --no-pager`. Comprueba la IP, el montaje y el entorno virtual.

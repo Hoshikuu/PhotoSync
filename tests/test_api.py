@@ -65,3 +65,37 @@ def test_recover_after_move_before_commit(client):
         db.execute("INSERT INTO backups(device_id,client_id,filename,size,sha256,path,state) VALUES (?,?,?,?,?,?,'pending')", ("device1", "recovery", "photo.jpg", len(data), hashlib.sha256(data).hexdigest(), relative))
     assert api.put("/backups/recovery", headers=headers(data), content=data).status_code == 200
     assert api.get("/backups/status", headers=headers(data)).json()["count"] == 1
+
+
+def test_gallery_auth_isolation_and_content(client):
+    api, module, storage = client
+    from photosync.db import connect, token_digest
+    data = b"image contents"
+    assert api.put("/backups/picture", headers=headers(data), content=data).status_code == 200
+    assert api.get("/").status_code == 200
+    assert api.get("/gallery/items").status_code == 401
+    assert api.get("/gallery/items/picture/content").status_code == 401
+    items = api.get("/gallery/items", headers=headers(data)).json()["items"]
+    assert len(items) == 1 and items[0]["filename"] == "photo.jpg"
+    response = api.get("/gallery/items/picture/content", headers=headers(data))
+    assert response.content == data
+    assert response.headers["content-type"] == "application/octet-stream"
+    with connect(module.settings.database) as db:
+        db.execute("INSERT INTO devices(id,name,token_hash) VALUES (?,?,?)", ("device2", "other", token_digest("other-token")))
+    other = {"Authorization": "Bearer other-token"}
+    assert api.get("/gallery/items", headers=other).json()["items"] == []
+    assert api.get("/gallery/items/picture/content", headers=other).status_code == 404
+    (storage / ".photosync-storage-id").unlink()
+    assert api.get("/gallery/items/picture/content", headers=headers(data)).status_code == 503
+
+
+def test_gallery_pagination(client):
+    api, module, storage = client
+    from photosync.db import connect
+    with connect(module.settings.database) as db:
+        for i in range(3):
+            db.execute("INSERT INTO backups(device_id,client_id,filename,size,sha256,path,state) VALUES (?,?,?,?,?,?,'complete')", ("device1", f"id{i}", "photo.jpg", 1, "a" * 64, f"devices/device1/{i}"))
+    first = api.get("/gallery/items?limit=2", headers=headers(b"")).json()
+    assert len(first["items"]) == 2 and first["next_offset"] == 2
+    second = api.get("/gallery/items?limit=2&offset=2", headers=headers(b"")).json()
+    assert len(second["items"]) == 1 and second["next_offset"] is None

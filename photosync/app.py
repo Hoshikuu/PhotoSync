@@ -6,8 +6,9 @@ import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import Depends, FastAPI, Header, HTTPException, Request
-from fastapi.responses import JSONResponse
+from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
+from fastapi.responses import FileResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from .config import Settings
@@ -28,6 +29,12 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="PhotoSync", version="0.1.0", lifespan=lifespan)
+app.mount("/gallery-assets", StaticFiles(directory=Path(__file__).parent / "static"), name="gallery-assets")
+
+
+@app.get("/", include_in_schema=False)
+def gallery():
+    return FileResponse(Path(__file__).parent / "static" / "index.html", headers={"Cache-Control": "no-store", "Content-Security-Policy": "default-src 'self'; img-src 'self' blob:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'", "X-Content-Type-Options": "nosniff"})
 
 
 def authenticate(authorization: str = Header(default="")):
@@ -70,6 +77,30 @@ def status(device: str = Depends(authenticate)):
     with connect(settings.database) as db:
         row = db.execute("SELECT COUNT(*) AS count, COALESCE(SUM(size),0) AS bytes FROM backups WHERE device_id=? AND state='complete'", (device,)).fetchone()
     return dict(row)
+
+
+@app.get("/gallery/items")
+def gallery_items(offset: int = Query(default=0, ge=0), limit: int = Query(default=12, ge=1, le=50), device: str = Depends(authenticate)):
+    with connect(settings.database) as db:
+        rows = db.execute("SELECT client_id, filename, size, created_at FROM backups WHERE device_id=? AND state='complete' ORDER BY created_at DESC, client_id DESC LIMIT ? OFFSET ?", (device, limit + 1, offset)).fetchall()
+    return {"items": [dict(row) for row in rows[:limit]], "next_offset": offset + limit if len(rows) > limit else None}
+
+
+@app.get("/gallery/items/{client_id}/content")
+def gallery_content(client_id: str, device: str = Depends(authenticate)):
+    with connect(settings.database) as db:
+        row = db.execute("SELECT path, filename FROM backups WHERE device_id=? AND client_id=? AND state='complete'", (device, client_id)).fetchone()
+    if not row:
+        raise HTTPException(404, "Backup not found")
+    if not ready():
+        raise HTTPException(503, "Storage unavailable")
+    root = settings.storage.resolve()
+    path = (root / row["path"]).resolve()
+    if not path.is_relative_to(root / "devices" / device) or not path.is_file():
+        raise HTTPException(404, "Backup file not found")
+    # Treat every original as inert bytes. The browser only displays explicitly
+    # supported image types after fetching with the device's bearer token.
+    return FileResponse(path, media_type="application/octet-stream", headers={"Cache-Control": "private, no-store", "X-Content-Type-Options": "nosniff", "Content-Disposition": "attachment"})
 
 
 @app.put("/backups/{client_id}")

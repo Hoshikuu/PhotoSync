@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <title>PhotoSync · Galería</title>
+  <link rel="stylesheet" href="/gallery-assets/style.css">
+  <script src="/gallery-assets/gallery.js" defer></script>
+</head>
+<body>
+  <header class="topbar"><div class="brand"><span class="brand-icon">✳</span><span>PhotoSync <small>GALERÍA LOCAL</small></span></div><button id="logout" class="subtle" hidden>Cerrar sesión</button></header>
+  <main>
+    <section id="login" class="login panel">
+      <span class="eyebrow">TUS RECUERDOS, EN CASA</span>
+      <h1>Tu galería personal.</h1>
+      <p>Accede a las fotos sincronizadas de tu dispositivo en la red local.</p>
+      <form id="login-form"><label for="token">Token del dispositivo</label><div class="form-row"><input id="token" type="password" autocomplete="off" required placeholder="Introduce tu token"><button type="submit">Entrar <span aria-hidden="true">→</span></button></div></form>
+      <p class="hint">Usa el token generado para el móvil que sincroniza tus fotos. Se conserva solo durante esta sesión.</p>
+      <p id="login-error" class="message error" role="alert"></p>
+    </section>
+    <section id="gallery" hidden>
+      <div class="gallery-heading"><div><span class="eyebrow">TU BIBLIOTECA</span><h1>Tus recuerdos<span class="accent">.</span></h1><p>Una colección que siempre está cerca.</p></div><div class="count"><strong id="count">—</strong><span>archivos sincronizados</span></div></div>
+      <div class="divider"><span>FOTOS Y ARCHIVOS</span><span>ORDENADOS POR SINCRONIZACIÓN</span></div>
+      <p id="status" class="message" role="status" aria-live="polite"></p>
+      <div id="grid" class="grid"></div>
+      <div class="more"><button id="next" class="outline" hidden>Siguientes archivos →</button></div>
+    </section>
+  </main>
+  <footer><span>✳ &nbsp; PhotoSync</span><span>Tu espacio. Tu red. Tus recuerdos.</span></footer>
+</body>
+</html>
