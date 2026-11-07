@@ -16,7 +16,7 @@ NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=true
-ReadWritePaths=/var/lib/photosync /mnt/photosync
+ReadWritePaths=/var/lib/photosync /mnt/hsk/photosync
 UMask=0077
 
 [Install]

@@ -1,57 +1,237 @@
-# PhotoSync backend
+# PhotoSync: instalación paso a paso
 
-API local para recibir originales de dispositivos autorizados. Destino previsto: Debian ARM en LXC, `192.168.1.202:8080`; NAS OMV NFS en `192.168.1.201`. La aplicación Android es independiente.
+PhotoSync recibe fotos y vídeos de una futura aplicación Android y guarda los originales en tu NAS. Todo funciona en la red local.
 
-## Preparación del almacenamiento
+| Equipo | Función | Dirección |
+| --- | --- | --- |
+| NAS OpenMediaVault | Guarda los archivos y comparte una carpeta por NFS. | `192.168.1.201` |
+| Host Proxmox en Raspberry Pi | Ejecuta el LXC y monta la carpeta del NAS. | La IP que ya tenga Proxmox |
+| LXC Debian | Ejecuta el backend. | `192.168.1.202` |
 
-Monta la exportación NFS en el **host Proxmox** y pásala al LXC como punto de montaje en `/mnt/photosync`. La exportación concreta y el identificador del contenedor dependen de la instalación. Comprueba la configuración de arranque y permisos UID/GID del LXC no privilegiado, y que el montaje dentro del contenedor muestre tipo `nfs` o `nfs4` en `/proc/self/mountinfo`. Debe permanecer montado y no caer silenciosamente al directorio local del host. Restringe el acceso NFS a los equipos necesarios.
+**Lee dónde ejecutar cada comando**: unos van en Proxmox y otros en el LXC. Los comandos de Linux suponen que has entrado como `root`, mediante consola o SSH.
 
-En el recurso ya montado, crea `.photosync-storage-id` con un valor aleatorio único y pon el mismo valor en `PHOTOSYNC_STORAGE_ID`. El servicio comprueba el marcador y el tipo del montaje antes de recibir; nunca debe crearse el marcador en el directorio subyacente del host. Comprueba también que el usuario `photosync` pueda escribir. NFS puede bloquear llamadas durante una caída: prueba el comportamiento del montaje en tu instalación.
+## Antes de empezar
 
-## Instalación Debian
+Necesitas tener creado un LXC Debian ARM conectado a tu red con la IP `192.168.1.202`. Esta guía no crea el LXC ni configura su red. Comprueba que la IP está libre.
 
-Instala Python 3, `python3-venv` y copia este proyecto a `/opt/photosync`. Crea el usuario de sistema `photosync`, el directorio persistente `/var/lib/photosync` con permisos para él, y prepara el entorno:
+También necesitas conocer:
+
+- El **ID del LXC** en Proxmox. Los ejemplos usan `123`; sustitúyelo por el tuyo.
+- La **ruta exacta exportada por NFS** en OpenMediaVault. Los ejemplos usan `/RUTA/EXPORTADA`; sustitúyela por la ruta real. No tiene por qué ser igual al nombre del recurso SMB.
+- La IP del host Proxmox y acceso de administrador a OMV, Proxmox y el LXC.
+- Acceso desde el LXC a los repositorios para instalar las dependencias durante la instalación.
+
+## 1. Preparar el recurso NFS
+
+En **OpenMediaVault**, comprueba que la carpeta deseada esté exportada por NFS, que el host Proxmox pueda conectarse y que los permisos permitan escribir. Anota la ruta real de exportación.
+
+En el **host Proxmox**, si tienes instalada la herramienta `showmount`, puedes consultar las exportaciones anunciadas:
 
 ```sh
+showmount -e 192.168.1.201
+```
+
+Si no aparece, revisa OMV: `showmount` no es concluyente para todas las configuraciones NFS. No uses literalmente `/RUTA/EXPORTADA` en el paso siguiente.
+
+## 2. Montar la carpeta en Proxmox
+
+En el **host Proxmox**, cambia `/RUTA/EXPORTADA` por la ruta real de OMV:
+
+```sh
+mkdir -p /mnt/hsk/photosync
+mount -t nfs 192.168.1.201:/RUTA/EXPORTADA /mnt/hsk/photosync
+findmnt -T /mnt/hsk/photosync
+```
+
+Comprueba que el origen indicado pertenece al NAS y que el tipo es `nfs` o `nfs4`. Si falla o muestra otro sistema de archivos, revisa la exportación, la red y los permisos antes de seguir.
+
+El comando anterior solo prueba el montaje: **no lo hace persistente**. Configura el montaje NFS permanente en el host, por ejemplo mediante `/etc/fstab` con las opciones adecuadas para tu instalación. Comprueba que se monta al arrancar Proxmox **antes de iniciar el LXC**. No inicies el contenedor con un directorio local vacío en lugar del NFS.
+
+## 3. Compartir el montaje con el LXC
+
+En el **host Proxmox**, sustituye `123` por el ID de tu contenedor:
+
+```sh
+pct config 123
+pct set 123 -mp0 /mnt/hsk/photosync,mp=/mnt/hsk/photosync
+```
+
+Antes de ejecutar el segundo comando, comprueba en la salida de `pct config` que `mp0` está libre. Si no lo está, usa otro índice libre, como `-mp1`; no sobrescribas otro montaje. Reinicia el LXC si es necesario para aplicar el cambio y abre su consola.
+
+En el **LXC Debian**:
+
+```sh
+ip -4 addr show
+findmnt -T /mnt/hsk/photosync
+```
+
+La primera salida debe mostrar `192.168.1.202` y la segunda un sistema de archivos `nfs` o `nfs4`. La aplicación necesita ver NFS dentro del contenedor. Si no aparece, detente y revisa los montajes antes de continuar.
+
+## 4. Copiar los archivos al LXC
+
+Primero, en el **LXC Debian**, crea un directorio temporal para recibir el proyecto:
+
+```sh
+mkdir -p /opt/photosync-transfer
+```
+
+Después, desde **PowerShell en Windows**, situado en la carpeta del proyecto:
+
+```powershell
+scp -r photosync deploy requirements.txt README.md ANDROID_INTEGRATION.md root@192.168.1.202:/opt/photosync-transfer/
+```
+
+Si SSH no permite entrar como root, copia los archivos con un usuario autorizado a una carpeta donde pueda escribir y adapta la ruta del comando `cp` del paso siguiente. No copies `.venv` de Windows: el entorno Python se creará dentro de Debian ARM.
+
+Ahora, en el **LXC Debian**, instala los archivos y dependencias:
+
+```sh
+apt update
+apt install -y python3 python3-venv python3-pip curl nano
+mkdir -p /opt/photosync
+cp -r /opt/photosync-transfer/. /opt/photosync/
 cd /opt/photosync
 python3 -m venv .venv
 .venv/bin/pip install -r requirements.txt
-sudo cp deploy/photosync.env.example /etc/photosync.env
-# Edita /etc/photosync.env con el identificador real del almacenamiento.
-sudo cp deploy/photosync.service /etc/systemd/system/photosync.service
-sudo systemctl daemon-reload
-sudo systemctl enable --now photosync
 ```
 
-La IP `192.168.1.202` tiene que estar configurada en el LXC antes de arrancar. El servicio usa un solo worker; no aumentes el número, ya que el control de subidas activas es por proceso. Limita el acceso de red con el cortafuegos. Esta versión sirve HTTP sin cifrar: usa una red de confianza o un proxy TLS con certificado que el cliente pueda verificar antes de utilizar tokens en una red no confiable.
+Comprueba que existen `/opt/photosync/photosync/app.py` y `/opt/photosync/deploy/photosync.service`.
 
-## Dispositivos
+## 5. Crear el usuario y comprobar la escritura
 
-No existe emparejamiento remoto en esta primera versión. Un administrador crea un token localmente y lo introduce en el cliente mediante un canal seguro:
+En el **LXC Debian**:
+
+```sh
+adduser --system --group --home /var/lib/photosync photosync
+mkdir -p /var/lib/photosync
+chown photosync:photosync /var/lib/photosync
+id photosync
+```
+
+La base de datos SQLite se guardará localmente en el LXC. Los originales se guardarán en el NAS. Comprueba que el usuario puede escribir en el NFS **solo después de verificar el montaje**:
+
+```sh
+runuser -u photosync -- sh -c 'touch /mnt/hsk/photosync/.photosync-write-test && rm /mnt/hsk/photosync/.photosync-write-test'
+```
+
+Si recibes `Permission denied`, detente. En un LXC no privilegiado, el UID/GID del usuario dentro del contenedor se traduce a otro en el host; OMV también puede aplicar `root_squash` y otros permisos. Revisa el mapeo y los permisos de la exportación según tu instalación. No apliques `chmod 777` ni cambies recursivamente los permisos del NAS como solución general.
+
+## 6. Configurar el identificador del almacenamiento
+
+El backend busca un archivo marcador para ayudar a identificar el almacenamiento. **Antes de crearlo, ejecuta `findmnt -T /mnt/hsk/photosync` y confirma que el NAS está montado.** No crees el marcador en el directorio local subyacente.
+
+En el **LXC Debian**, copia y abre la configuración:
+
+```sh
+cp /opt/photosync/deploy/photosync.env.example /etc/photosync.env
+nano /etc/photosync.env
+```
+
+Busca esta línea:
+
+```text
+PHOTOSYNC_STORAGE_ID=replace-with-a-unique-random-value
+```
+
+Sustituye el valor por una cadena aleatoria única, sin espacios ni comillas. Para generar una, abre otra consola del LXC o sal temporalmente del editor y ejecuta:
+
+```sh
+python3 -c 'import secrets; print(secrets.token_hex(32))'
+```
+
+Copia el valor en `/etc/photosync.env`. En `nano`, guarda con `Ctrl+O`, pulsa `Enter` y sal con `Ctrl+X`.
+
+Después crea el marcador en el **NFS montado** con exactamente el mismo valor. Sustituye `PEGA_EL_MISMO_VALOR` por la cadena generada:
+
+```sh
+printf '%s\n' 'PEGA_EL_MISMO_VALOR' > /mnt/hsk/photosync/.photosync-storage-id
+```
+
+El usuario `photosync` debe poder leer el marcador y escribir en la carpeta. Mantén `PHOTOSYNC_REQUIRE_NFS=1` para el despliegue real. Si cambias la ruta de almacenamiento, tendrás que actualizar también el montaje y `ReadWritePaths` en el servicio.
+
+## 7. Iniciar el backend
+
+En el **LXC Debian**:
+
+```sh
+cp /opt/photosync/deploy/photosync.service /etc/systemd/system/photosync.service
+systemctl daemon-reload
+systemctl enable --now photosync
+systemctl status photosync --no-pager
+```
+
+El servicio escucha en `192.168.1.202:8080`. Si decides usar otra IP, cambia `--host` en el servicio instalado y recarga systemd. Mantén un solo worker: el control de subidas activas de esta versión funciona por proceso. Restringe el puerto a la red local mediante el cortafuegos y no configures redirecciones en el router.
+
+## 8. Comprobar la conexión
+
+En el **LXC Debian**:
+
+```sh
+curl -i http://192.168.1.202:8080/health
+```
+
+Si funciona, recibirás `200 OK` y:
+
+```json
+{"status":"ok","storage_available":true}
+```
+
+Desde un ordenador conectado a la misma red puedes abrir `http://192.168.1.202:8080/docs`. Si obtienes `503`, consulta la sección de problemas. Esta comprobación por sí sola no prueba una subida real.
+
+## 9. Crear un token para el móvil
+
+En el **LXC Debian**:
 
 ```sh
 cd /opt/photosync
-sudo -u photosync sh -c 'set -a; . /etc/photosync.env; set +a; .venv/bin/python -m photosync.admin add-device movil'
-sudo -u photosync sh -c 'set -a; . /etc/photosync.env; set +a; .venv/bin/python -m photosync.admin list-devices'
-sudo -u photosync sh -c 'set -a; . /etc/photosync.env; set +a; .venv/bin/python -m photosync.admin revoke-device ID'
+runuser -u photosync -- sh -c 'set -a; . /etc/photosync.env; set +a; .venv/bin/python -m photosync.admin add-device movil'
 ```
 
-El token solo se muestra al crearlo. Usa `Authorization: Bearer TOKEN` en los endpoints de copia. Los nombres y credenciales nunca se imprimen en logs de la aplicación.
+Verás un `Device ID` y un `Token`. **Guarda el token de forma segura: solo se muestra una vez.** Se introducirá en la aplicación Android; todavía no hay emparejamiento por QR.
 
-## Contrato de API
-
-La documentación interactiva está en `/docs` y el esquema en `/openapi.json`. `GET /health` devuelve 503 si el almacenamiento no está disponible. `GET /backups/status` devuelve el número y tamaño de copias del dispositivo. `POST /backups/check` recibe `{"client_ids":["id1"]}` y devuelve registros completados.
-
-`PUT /backups/{client_id}` recibe el archivo original como cuerpo binario, con cabeceras `Authorization`, `X-Filename`, `X-File-Size` (bytes) y `X-Sha256` (hexadecimal minúsculo). El identificador debe ser estable por dispositivo, de 1 a 128 caracteres ASCII alfanuméricos, `_` o `-`. El nombre se registra como metadato y debe poder representarse en una cabecera HTTP; no controla la ruta del servidor. Conserva mismo identificador y metadatos para reintentar: una operación completada responde de nuevo sin duplicarla; metadatos distintos reciben 409. Un fallo tras mover el archivo se recupera al reintentar, verificando su hash.
-
-La recepción es incremental, con dos subidas simultáneas y 10 GiB por archivo por defecto. Las copias terminadas se identifican por dispositivo e ID; no hay deduplicación global, restauración, limpieza automática de temporales tras caída de proceso, gestión de fechas ni subida reanudable por bloques. La API de consulta refleja la base de datos y no comprueba si cada archivo sigue en el NAS. Los archivos utilizan nombres internos sin extensión; los nombres originales se conservan en SQLite. Respalda SQLite mediante la API de backup de SQLite o con el servicio parado, además de respaldar el NAS.
-
-## Verificación
+Para listar dispositivos o revocar uno, sustituye `ID_DEL_DISPOSITIVO` por el ID mostrado:
 
 ```sh
-python -m pip install pytest httpx
-python -m compileall -q photosync
-python -m pytest -q
+runuser -u photosync -- sh -c 'set -a; . /etc/photosync.env; set +a; .venv/bin/python -m photosync.admin list-devices'
+runuser -u photosync -- sh -c 'set -a; . /etc/photosync.env; set +a; .venv/bin/python -m photosync.admin revoke-device ID_DEL_DISPOSITIVO'
 ```
 
-Las pruebas usan un directorio local y desactivan la comprobación NFS exclusivamente para ellas. Antes de producción verifica NFS real, permisos, desconexión/reconexión, reinicios, integridad y consumo de RAM en la Raspberry Pi. No se ha medido el límite de 1 GB en el dispositivo real.
+La API usa `Authorization: Bearer TOKEN`. Esta versión utiliza HTTP sin cifrar: el token y los archivos pueden ser observados en la red. Para protegerlos en tránsito, configura HTTPS con un certificado que Android pueda verificar.
+
+## 10. Probar una subida
+
+Antes de usar fotos importantes, prueba con un archivo pequeño. En el **LXC Debian**, sustituye `PEGA_AQUI_EL_TOKEN` por el token creado:
+
+```sh
+printf 'prueba de PhotoSync\n' > /tmp/photosync-test.txt
+SHA=$(sha256sum /tmp/photosync-test.txt | cut -d ' ' -f 1)
+SIZE=$(wc -c < /tmp/photosync-test.txt | tr -d ' ')
+curl -i -X PUT 'http://192.168.1.202:8080/backups/prueba_1' \
+  -H 'Authorization: Bearer PEGA_AQUI_EL_TOKEN' \
+  -H 'X-Filename: photosync-test.txt' \
+  -H "X-File-Size: $SIZE" \
+  -H "X-Sha256: $SHA" \
+  -H 'Content-Type: application/octet-stream' \
+  --data-binary @/tmp/photosync-test.txt
+```
+
+Debe responder `200` con `"status":"complete"`. Repetir la misma petición no crea otra copia para ese dispositivo e ID. El token escrito en comandos puede quedar en el historial: usa un token de prueba y revócalo después si es necesario. Esta prueba deja un archivo en el NAS y su registro en SQLite.
+
+Para desarrollar la aplicación Android, consulta [la guía de integración](./ANDROID_INTEGRATION.md).
+
+## Problemas frecuentes
+
+- **El servicio no arranca:** ejecuta `systemctl status photosync --no-pager` y `journalctl -u photosync -n 100 --no-pager`. Comprueba la IP, el montaje y el entorno virtual.
+- **`/health` devuelve 503:** revisa `findmnt -T /mnt/hsk/photosync` dentro del LXC, el marcador, su valor en `/etc/photosync.env` y los permisos. NFS puede bloquear operaciones durante una caída; prueba la recuperación en tu instalación.
+- **No se puede escribir:** revisa los permisos en OMV y el mapeo UID/GID del LXC. Root dentro del contenedor no implica acceso root al NAS.
+- **La app recibe 401:** revisa el token y si el dispositivo está revocado.
+- **La app recibe 409:** puede haber una subida activa o un ID reutilizado con metadatos diferentes; consulta el mensaje de respuesta.
+- **Tras editar el servicio:** ejecuta `systemctl daemon-reload` y `systemctl restart photosync`. Tras editar `/etc/photosync.env`, reinicia el servicio.
+
+## Copias de seguridad y límites
+
+Los originales están en el NAS. Los dispositivos, nombres, hashes y rutas se guardan en `/var/lib/photosync/photosync.db`, dentro del LXC. Respalda también esa base de datos mediante la API de backup de SQLite o con el servicio detenido.
+
+Los archivos usan nombres internos sin extensión; el nombre enviado se guarda en SQLite. La consulta de copias no comprueba cada archivo físico. Todavía no hay descarga, restauración, reanudación por bloques ni limpieza automática de temporales después de una caída. No borres los originales del teléfono basándote únicamente en la respuesta de la API.
+
+Las pruebas automatizadas existentes usan almacenamiento local simulado. El montaje NFS real, las desconexiones, los reinicios y el objetivo de menos de 1 GB de RAM aún deben verificarse en la Raspberry Pi y el LXC reales.

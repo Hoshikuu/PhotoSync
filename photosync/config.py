@@ -15,7 +15,7 @@ class Settings:
     @classmethod
     def from_env(cls):
         return cls(
-            Path(os.getenv("PHOTOSYNC_STORAGE", "/mnt/photosync")),
+            Path(os.getenv("PHOTOSYNC_STORAGE", "/mnt/hsk/photosync")),
             Path(os.getenv("PHOTOSYNC_DATABASE", "/var/lib/photosync/photosync.db")),
             os.getenv("PHOTOSYNC_STORAGE_ID", ""),
             os.getenv("PHOTOSYNC_REQUIRE_NFS", "1") == "1",
